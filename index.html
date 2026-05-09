@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>Mi Gestor Financiero</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#ffffff" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.x/tabler-icons.min.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #ffffff; --bg2: #f4f4f2; --bg3: #ebebea;
+      --text: #1a1a18; --text2: #6b6b68; --text3: #9e9e9b;
+      --border: rgba(0,0,0,0.12); --border2: rgba(0,0,0,0.22);
+      --radius: 10px; --radius-lg: 14px;
+      --green: #1D9E75; --red: #E24B4A; --purple: #7F77DD; --blue: #3266ad; --orange: #D85A30; --amber: #BA7517; --gray: #888780;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1c1c1a; --bg2: #272725; --bg3: #303030;
+        --text: #f0f0ee; --text2: #a0a09d; --text3: #6b6b68;
+        --border: rgba(255,255,255,0.1); --border2: rgba(255,255,255,0.2);
+      }
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg3); color: var(--text); font-size: 16px; min-height: 100vh; }
+    #app { max-width: 480px; margin: 0 auto; background: var(--bg); min-height: 100vh; position: relative; padding-bottom: 80px; }
+    input, select, textarea { font-family: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 0.5px solid var(--border2); border-radius: var(--radius); padding: 8px 10px; width: 100%; outline: none; }
+    input:focus, select:focus { border-color: var(--text2); }
+    button { font-family: inherit; cursor: pointer; border-radius: var(--radius); border: 0.5px solid var(--border2); background: var(--bg); color: var(--text); padding: 8px 14px; font-size: 14px; }
+    button:active { opacity: 0.75; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useReducer, useEffect } = React;
+
+const STORAGE_KEY = "gestor_v1";
+
+const CUENTAS_DEFAULT = [
+  { id: "efectivo", nombre: "Efectivo / Billetera", moneda: "ARS", color: "#1D9E75" },
+  { id: "mp",       nombre: "Mercado Pago",         moneda: "ARS", color: "#3266ad" },
+  { id: "bot",      nombre: "Bot de Trading",       moneda: "USDT", color: "#7F77DD" },
+  { id: "inversion",nombre: "Inversiones",          moneda: "USDT", color: "#D85A30" },
+];
+
+const CATS_GASTO   = ["Comida","Transporte","Servicios","Salud","Entretenimiento","Ropa","Otros"];
+const CATS_INGRESO = ["Sueldo","Freelance","Venta","Rendimiento bot","Otros"];
+const CAT_COLORS   = {
+  Comida:"#1D9E75",Transporte:"#3266ad",Servicios:"#7F77DD",Salud:"#E24B4A",
+  Entretenimiento:"#D85A30",Ropa:"#BA7517",Otros:"#888780",
+  Sueldo:"#1D9E75",Freelance:"#3266ad",Venta:"#7F77DD","Rendimiento bot":"#D85A30",
+};
+const TIPO_COLOR = { gasto:"#E24B4A", ingreso:"#1D9E75", transferencia:"#7F77DD" };
+const TIPO_LABEL = { gasto:"Gasto", ingreso:"Ingreso", transferencia:"Transfer." };
+
+function loadState() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch {}
+  return null;
+}
+
+function initState() {
+  const saved = loadState();
+  return saved || {
+    cuentas: CUENTAS_DEFAULT,
+    movimientos: [],
+    tcambio: { ARS_USD: 1200, USDT_USD: 1 },
+    vista: "dashboard",
+    grafMes: new Date().toISOString().slice(0,7),
+    form: { tipo:"gasto", monto:"", moneda:"ARS", cuenta:"efectivo", cuentaDest:"mp", categoria:"Comida", nota:"", fecha:new Date().toISOString().slice(0,10) },
+    formTC: { ARS_USD:"1200" },
+    showAddMov: false,
+    showEditTC: false,
+  };
+}
+
+function reducer(s, a) {
+  switch (a.type) {
+    case "SET_VISTA":     return { ...s, vista: a.vista };
+    case "SET_FORM":      return { ...s, form: { ...s.form, ...a.data } };
+    case "SET_FORM_TC":   return { ...s, formTC: { ...s.formTC, ...a.data } };
+    case "TOGGLE_ADD_MOV":return { ...s, showAddMov: !s.showAddMov };
+    case "TOGGLE_EDIT_TC":return { ...s, showEditTC: !s.showEditTC };
+    case "SET_GRAF_MES":  return { ...s, grafMes: a.mes };
+    case "GUARDAR_TC": {
+      const v = parseFloat(s.formTC.ARS_USD);
+      if (isNaN(v) || v <= 0) return s;
+      return { ...s, tcambio: { ...s.tcambio, ARS_USD: v }, showEditTC: false };
+    }
+    case "ADD_MOV": {
+      const monto = parseFloat(s.form.monto);
+      if (isNaN(monto) || monto <= 0) return s;
+      const mov = { id: Date.now(), ...s.form, monto };
+      return { ...s, movimientos: [mov, ...s.movimientos], showAddMov: false, form: { ...s.form, monto:"", nota:"" } };
+    }
+    case "DEL_MOV": return { ...s, movimientos: s.movimientos.filter(m => m.id !== a.id) };
+    default: return s;
+  }
+}
+
+function toUSD(monto, moneda, tc) {
+  if (moneda === "USD")  return monto;
+  if (moneda === "USDT") return monto * tc.USDT_USD;
+  if (moneda === "ARS")  return monto / tc.ARS_USD;
+  return monto;
+}
+function toARS(monto, moneda, tc) {
+  if (moneda === "ARS")  return monto;
+  if (moneda === "USD")  return monto * tc.ARS_USD;
+  if (moneda === "USDT") return monto * tc.USDT_USD * tc.ARS_USD;
+  return monto;
+}
+const fmtN  = (n, sym) => sym + n.toLocaleString("es-AR", { minimumFractionDigits:2, maximumFractionDigits:2 });
+const fmtM  = (n, mon) => fmtN(n, mon === "ARS" ? "$" : mon === "USDT" ? "USDT " : "USD ");
+const fmtUSD= n => fmtN(n, "USD ");
+const fmtARS= n => "$ " + Math.round(n).toLocaleString("es-AR");
+
+function calcSaldos(movimientos, cuentas) {
+  const s = {};
+  cuentas.forEach(c => { s[c.id] = 0; });
+  movimientos.forEach(m => {
+    if (m.tipo === "ingreso")       s[m.cuenta] = (s[m.cuenta]||0) + m.monto;
+    else if (m.tipo === "gasto")    s[m.cuenta] = (s[m.cuenta]||0) - m.monto;
+    else if (m.tipo === "transferencia") {
+      s[m.cuenta]    = (s[m.cuenta]||0)    - m.monto;
+      if (m.cuentaDest) s[m.cuentaDest] = (s[m.cuentaDest]||0) + m.monto;
+    }
+  });
+  return s;
+}
+
+function Pill({ txt, color }) {
+  return <span style={{ background: color+"22", color, fontSize:11, fontWeight:500, borderRadius:99, padding:"2px 8px" }}>{txt}</span>;
+}
+
+function DonutChart({ data, total, label }) {
+  const R=58, circ=2*Math.PI*R; let off=0;
+  const slices = data.map(d => {
+    const dash = total > 0 ? (d.value/total)*circ : 0;
+    const sl = { ...d, dash, gap: circ-dash, off };
+    off += dash; return sl;
+  });
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:16 }}>
+      <svg width={160} height={160} viewBox="0 0 160 160">
+        <circle cx={80} cy={80} r={R} fill="none" stroke="var(--border)" strokeWidth={22}/>
+        {slices.map((sl,i) => sl.dash > 0 && (
+          <circle key={i} cx={80} cy={80} r={R} fill="none"
+            stroke={sl.color} strokeWidth={22}
+            strokeDasharray={`${sl.dash} ${sl.gap}`}
+            strokeDashoffset={-sl.off + circ*0.25} />
+        ))}
+        <text x={80} y={74} textAnchor="middle" fontSize={11} fill="var(--text2)">{label}</text>
+        <text x={80} y={92} textAnchor="middle" fontSize={13} fontWeight={500} fill="var(--text)">{fmtUSD(total)}</text>
+      </svg>
+      <div style={{ flex:1, display:"flex", flexDirection:"column", gap:6 }}>
+        {data.map((d,i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:7, fontSize:12 }}>
+            <div style={{ width:10, height:10, borderRadius:2, background:d.color, flexShrink:0 }}></div>
+            <div style={{ flex:1, color:"var(--text2)" }}>{d.label}</div>
+            <div style={{ fontWeight:500 }}>{total > 0 ? ((d.value/total)*100).toFixed(1) : 0}%</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BarChart({ data }) {
+  const max = Math.max(...data.map(d => d.value), 1);
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+      {data.map((d,i) => (
+        <div key={i}>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 }}>
+            <span style={{ color:"var(--text2)" }}>{d.label}</span>
+            <span style={{ fontWeight:500 }}>{fmtUSD(d.value)}</span>
+          </div>
+          <div style={{ height:7, background:"var(--bg3)", borderRadius:99, overflow:"hidden" }}>
+            <div style={{ height:"100%", width:`${(d.value/max)*100}%`, background:d.color, borderRadius:99 }}></div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function App() {
+  const [s, dispatch] = useReducer(reducer, null, initState);
+
+  // Persistencia automática
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch {}
+  }, [s]);
+
+  const saldos   = calcSaldos(s.movimientos, s.cuentas);
+  const totalUSD = s.cuentas.reduce((a,c) => a + toUSD(saldos[c.id]||0, c.moneda, s.tcambio), 0);
+  const totalARS = totalUSD * s.tcambio.ARS_USD;
+  const mesAct   = new Date().toISOString().slice(0,7);
+
+  const mesMov = mes => s.movimientos.filter(m => m.fecha?.slice(0,7) === mes);
+  const ingMes = mesMov(mesAct).filter(m => m.tipo === "ingreso").reduce((a,m) => a + toUSD(m.monto,m.moneda,s.tcambio), 0);
+  const gasMes = mesMov(mesAct).filter(m => m.tipo === "gasto").reduce((a,m)   => a + toUSD(m.monto,m.moneda,s.tcambio), 0);
+
+  // Datos gráficos
+  const grafMovGas = mesMov(s.grafMes).filter(m => m.tipo === "gasto");
+  const grafMovIng = mesMov(s.grafMes).filter(m => m.tipo === "ingreso");
+  const agrup = (movs) => {
+    const map = {};
+    movs.forEach(m => { map[m.categoria] = (map[m.categoria]||0) + toUSD(m.monto,m.moneda,s.tcambio); });
+    return Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([k,v])=>({ label:k, value:v, color:CAT_COLORS[k]||"#888780" }));
+  };
+  const catGas  = agrup(grafMovGas);
+  const catIng  = agrup(grafMovIng);
+  const totGas  = catGas.reduce((a,d)=>a+d.value,0);
+  const totIng  = catIng.reduce((a,d)=>a+d.value,0);
+
+  const mesesDisp = [...new Set(s.movimientos.map(m=>m.fecha?.slice(0,7)))].sort().reverse();
+  if (!mesesDisp.includes(mesAct)) mesesDisp.unshift(mesAct);
+
+  const nav = [
+    { id:"dashboard", icon:"ti-layout-dashboard", label:"Resumen" },
+    { id:"graficos",  icon:"ti-chart-pie",         label:"Gráficos" },
+    { id:"movimientos",icon:"ti-arrows-exchange",  label:"Movimientos" },
+    { id:"cuentas",   icon:"ti-wallet",            label:"Cuentas" },
+  ];
+
+  const card = (children, extra={}) => (
+    <div style={{ background:"var(--bg)", border:"0.5px solid var(--border)", borderRadius:"var(--radius-lg)", padding:"14px 16px", ...extra }}>{children}</div>
+  );
+  const label11 = txt => <div style={{ fontSize:11, color:"var(--text2)", marginBottom:3 }}>{txt}</div>;
+
+  return (
+    <div id="app-inner">
+      <span className="sr-only">Gestor financiero personal</span>
+
+      {/* Header */}
+      <div style={{ padding:"1.25rem 1rem 0.75rem", borderBottom:"0.5px solid var(--border)" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+          <div>
+            <div style={{ fontSize:12, color:"var(--text2)" }}>Patrimonio total</div>
+            <div style={{ fontSize:30, fontWeight:500, lineHeight:1.2 }}>{fmtUSD(totalUSD)}</div>
+            <div style={{ fontSize:13, color:"var(--text2)" }}>{fmtARS(totalARS)}</div>
+          </div>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:12, color:"var(--text2)" }}>
+              1 USD = {fmtARS(s.tcambio.ARS_USD)}
+              <button onClick={()=>dispatch({type:"TOGGLE_EDIT_TC"})} style={{ marginLeft:5, background:"none", border:"none", cursor:"pointer", color:"var(--text2)", padding:0, fontSize:14 }}>
+                <i className="ti ti-edit"></i>
+              </button>
+            </div>
+            {s.showEditTC && (
+              <div style={{ display:"flex", gap:5, alignItems:"center", marginTop:5 }}>
+                <input type="number" value={s.formTC.ARS_USD} onChange={e=>dispatch({type:"SET_FORM_TC",data:{ARS_USD:e.target.value}})} style={{ width:90 }} />
+                <button onClick={()=>dispatch({type:"GUARDAR_TC"})} style={{ padding:"6px 10px", fontSize:12 }}>OK</button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Nav */}
+      <div style={{ display:"flex", borderBottom:"0.5px solid var(--border)", background:"var(--bg)", position:"sticky", top:0, zIndex:10 }}>
+        {nav.map(n => (
+          <button key={n.id} onClick={()=>dispatch({type:"SET_VISTA",vista:n.id})}
+            style={{ flex:1, background:"none", border:"none", borderBottom:`2px solid ${s.vista===n.id?"var(--text)":"transparent"}`, cursor:"pointer", padding:"10px 0", fontSize:11, fontWeight:s.vista===n.id?500:400, color:s.vista===n.id?"var(--text)":"var(--text2)", display:"flex", alignItems:"center", justifyContent:"center", gap:3 }}>
+            <i className={`ti ${n.icon}`} style={{ fontSize:15 }}></i> {n.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ padding:"1rem" }}>
+
+        {/* ───── DASHBOARD ───── */}
+        {s.vista === "dashboard" && <>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:"1.25rem" }}>
+            {[
+              { label:"Ingresos mes", val:fmtUSD(ingMes), sub:fmtARS(ingMes*s.tcambio.ARS_USD), col:"var(--green)" },
+              { label:"Gastos mes",   val:fmtUSD(gasMes), sub:fmtARS(gasMes*s.tcambio.ARS_USD), col:"var(--red)" },
+              { label:"Balance",      val:fmtUSD(ingMes-gasMes), sub:fmtARS((ingMes-gasMes)*s.tcambio.ARS_USD), col:(ingMes-gasMes)>=0?"var(--green)":"var(--red)" },
+            ].map(c => (
+              <div key={c.label} style={{ background:"var(--bg2)", borderRadius:"var(--radius)", padding:"10px 10px" }}>
+                <div style={{ fontSize:10, color:"var(--text2)", marginBottom:3 }}>{c.label}</div>
+                <div style={{ fontSize:14, fontWeight:500, color:c.col }}>{c.val}</div>
+                <div style={{ fontSize:10, color:"var(--text3)" }}>{c.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ marginBottom:"1.25rem" }}>
+            <div style={{ fontSize:13, fontWeight:500, marginBottom:8 }}>Mis cuentas</div>
+            {s.cuentas.map(c => {
+              const sal = saldos[c.id]||0;
+              return (
+                <div key={c.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", marginBottom:8, background:"var(--bg)", border:"0.5px solid var(--border)", borderRadius:"var(--radius-lg)" }}>
+                  <div style={{ width:10, height:10, borderRadius:"50%", background:c.color }}></div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:14, fontWeight:500 }}>{c.nombre}</div>
+                    <div style={{ fontSize:11, color:"var(--text2)" }}>{c.moneda}</div>
+                  </div>
+                  <div style={{ textAlign:"right" }}>
+                    <div style={{ fontSize:15, fontWeight:500 }}>{fmtM(sal,c.moneda)}</div>
+                    <div style={{ fontSize:11, color:"var(--text2)" }}>{fmtUSD(toUSD(sal,c.moneda,s.tcambio))}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div>
+            <div style={{ fontSize:13, fontWeight:500, marginBottom:8 }}>Últimos movimientos</div>
+            {s.movimientos.length === 0 && <div style={{ color:"var(--text2)", fontSize:13, textAlign:"center", padding:"2rem 0" }}>No hay movimientos. ¡Agregá el primero!</div>}
+            {s.movimientos.slice(0,6).map(m => {
+              const cta = s.cuentas.find(c=>c.id===m.cuenta);
+              return (
+                <div key={m.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:"0.5px solid var(--border)" }}>
+                  <div style={{ width:8, height:8, borderRadius:"50%", background:TIPO_COLOR[m.tipo], flexShrink:0 }}></div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:13, fontWeight:500 }}>{m.categoria}{m.nota?` — ${m.nota}`:""}</div>
+                    <div style={{ fontSize:11, color:"var(--text2)" }}>{m.fecha} · {cta?.nombre}</div>
+                  </div>
+                  <div style={{ fontSize:14, fontWeight:500, color:TIPO_COLOR[m.tipo] }}>
+                    {m.tipo==="gasto"?"-":m.tipo==="ingreso"?"+":""}{fmtM(m.monto,m.moneda)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>}
+
+        {/* ───── GRÁFICOS ───── */}
+        {s.vista === "graficos" && <>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"1rem" }}>
+            <div style={{ fontSize:14, fontWeight:500 }}>Análisis mensual</div>
+            <select value={s.grafMes} onChange={e=>dispatch({type:"SET_GRAF_MES",mes:e.target.value})} style={{ width:"auto", fontSize:13 }}>
+              {mesesDisp.map(m=><option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+
+          {card(<>
+            <div style={{ fontSize:13, fontWeight:500, marginBottom:12, display:"flex", alignItems:"center", gap:6 }}>
+              <div style={{ width:8,height:8,borderRadius:"50%",background:"var(--red)" }}></div> Gastos por categoría
+            </div>
+            {catGas.length === 0
+              ? <div style={{ fontSize:13,color:"var(--text2)",textAlign:"center",padding:"1.5rem 0" }}>Sin gastos en este mes</div>
+              : <DonutChart data={catGas} total={totGas} label="Total gastos" />}
+          </>, { marginBottom:12 })}
+
+          {catGas.length > 0 && card(<>
+            <div style={{ fontSize:13, fontWeight:500, marginBottom:12 }}>Detalle gastos</div>
+            <BarChart data={catGas} />
+          </>, { marginBottom:12 })}
+
+          {card(<>
+            <div style={{ fontSize:13, fontWeight:500, marginBottom:12, display:"flex", alignItems:"center", gap:6 }}>
+              <div style={{ width:8,height:8,borderRadius:"50%",background:"var(--green)" }}></div> Ingresos por categoría
+            </div>
+            {catIng.length === 0
+              ? <div style={{ fontSize:13,color:"var(--text2)",textAlign:"center",padding:"1.5rem 0" }}>Sin ingresos en este mes</div>
+              : <DonutChart data={catIng} total={totIng} label="Total ingresos" />}
+          </>, { marginBottom:12 })}
+
+          <div style={{ background:"var(--bg2)", borderRadius:"var(--radius-lg)", padding:"14px 16px" }}>
+            <div style={{ fontSize:13, fontWeight:500, marginBottom:12 }}>Ingresos vs Gastos</div>
+            {[{ label:"Ingresos",value:totIng,color:"var(--green)"},{label:"Gastos",value:totGas,color:"var(--red)"}].map(d => {
+              const maxV = Math.max(totIng,totGas,1);
+              return <div key={d.label} style={{ marginBottom:10 }}>
+                <div style={{ display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4 }}>
+                  <span style={{ color:"var(--text2)" }}>{d.label}</span>
+                  <span style={{ fontWeight:500,color:d.color }}>{fmtUSD(d.value)}</span>
+                </div>
+                <div style={{ height:10,background:"var(--bg3)",borderRadius:99,overflow:"hidden" }}>
+                  <div style={{ height:"100%",width:`${(d.value/maxV)*100}%`,background:d.color,borderRadius:99 }}></div>
+                </div>
+              </div>;
+            })}
+            <div style={{ marginTop:8, fontSize:13, fontWeight:500, color:(totIng-totGas)>=0?"var(--green)":"var(--red)" }}>
+              Balance: {fmtUSD(totIng-totGas)}
+            </div>
+          </div>
+        </>}
+
+        {/* ───── MOVIMIENTOS ───── */}
+        {s.vista === "movimientos" && <>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"1rem" }}>
+            <div style={{ fontSize:14, fontWeight:500 }}>Movimientos</div>
+            <button onClick={()=>dispatch({type:"TOGGLE_ADD_MOV"})} style={{ display:"flex",alignItems:"center",gap:5,fontSize:13 }}>
+              <i className="ti ti-plus"></i> Agregar
+            </button>
+          </div>
+
+          {s.showAddMov && (
+            <div style={{ background:"var(--bg2)",border:"0.5px solid var(--border)",borderRadius:"var(--radius-lg)",padding:"14px",marginBottom:"1rem" }}>
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10 }}>
+                {["ingreso","gasto","transferencia"].map(t => (
+                  <button key={t} onClick={()=>dispatch({type:"SET_FORM",data:{tipo:t,categoria:t==="ingreso"?"Sueldo":"Comida"}})}
+                    style={{ fontSize:12,fontWeight:500,background:s.form.tipo===t?TIPO_COLOR[t]:"none",color:s.form.tipo===t?"#fff":"var(--text2)",border:`0.5px solid ${TIPO_COLOR[t]}`,borderRadius:"var(--radius)",padding:"7px 0",cursor:"pointer" }}>
+                    {TIPO_LABEL[t]}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8 }}>
+                <div>{label11("Monto")}<input type="number" placeholder="0.00" value={s.form.monto} onChange={e=>dispatch({type:"SET_FORM",data:{monto:e.target.value}})} /></div>
+                <div>{label11("Moneda")}<select value={s.form.moneda} onChange={e=>dispatch({type:"SET_FORM",data:{moneda:e.target.value}})}><option>ARS</option><option>USD</option><option>USDT</option></select></div>
+                <div>{label11("Cuenta origen")}<select value={s.form.cuenta} onChange={e=>dispatch({type:"SET_FORM",data:{cuenta:e.target.value}})}>{s.cuentas.map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
+                {s.form.tipo==="transferencia" && <div>{label11("Cuenta destino")}<select value={s.form.cuentaDest} onChange={e=>dispatch({type:"SET_FORM",data:{cuentaDest:e.target.value}})}>{s.cuentas.filter(c=>c.id!==s.form.cuenta).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>}
+                <div>{label11("Categoría")}<select value={s.form.categoria} onChange={e=>dispatch({type:"SET_FORM",data:{categoria:e.target.value}})}>{(s.form.tipo==="ingreso"?CATS_INGRESO:CATS_GASTO).map(c=><option key={c}>{c}</option>)}</select></div>
+                <div>{label11("Fecha")}<input type="date" value={s.form.fecha} onChange={e=>dispatch({type:"SET_FORM",data:{fecha:e.target.value}})} /></div>
+              </div>
+              <div style={{ marginBottom:10 }}>{label11("Nota (opcional)")}<input type="text" placeholder="Descripción..." value={s.form.nota} onChange={e=>dispatch({type:"SET_FORM",data:{nota:e.target.value}})} /></div>
+              <div style={{ display:"flex",gap:8 }}>
+                <button onClick={()=>dispatch({type:"ADD_MOV"})} style={{ flex:1,fontSize:13,fontWeight:500 }}>Guardar</button>
+                <button onClick={()=>dispatch({type:"TOGGLE_ADD_MOV"})} style={{ fontSize:13 }}>Cancelar</button>
+              </div>
+            </div>
+          )}
+
+          {s.movimientos.length===0 && !s.showAddMov && <div style={{ color:"var(--text2)",fontSize:13,textAlign:"center",padding:"2rem 0" }}>No hay movimientos aún.</div>}
+          {s.movimientos.map(m => {
+            const cta  = s.cuentas.find(c=>c.id===m.cuenta);
+            const ctaD = s.cuentas.find(c=>c.id===m.cuentaDest);
+            return (
+              <div key={m.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"0.5px solid var(--border)" }}>
+                <div style={{ width:8,height:8,borderRadius:"50%",background:TIPO_COLOR[m.tipo],flexShrink:0 }}></div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:13,fontWeight:500 }}>{m.categoria}{m.nota?` — ${m.nota}`:""}</div>
+                  <div style={{ fontSize:11,color:"var(--text2)",display:"flex",gap:7,flexWrap:"wrap",marginTop:2 }}>
+                    <span>{m.fecha}</span>
+                    <span>{cta?.nombre}{ctaD?` → ${ctaD.nombre}`:""}</span>
+                    <Pill txt={TIPO_LABEL[m.tipo]} color={TIPO_COLOR[m.tipo]} />
+                  </div>
+                </div>
+                <div style={{ textAlign:"right",marginRight:4 }}>
+                  <div style={{ fontSize:14,fontWeight:500,color:TIPO_COLOR[m.tipo] }}>{m.tipo==="gasto"?"-":m.tipo==="ingreso"?"+":""}{fmtM(m.monto,m.moneda)}</div>
+                  <div style={{ fontSize:11,color:"var(--text2)" }}>{fmtUSD(toUSD(m.monto,m.moneda,s.tcambio))}</div>
+                </div>
+                <button onClick={()=>dispatch({type:"DEL_MOV",id:m.id})} style={{ background:"none",border:"none",cursor:"pointer",color:"var(--text2)",padding:0,fontSize:16 }} aria-label="eliminar">
+                  <i className="ti ti-trash"></i>
+                </button>
+              </div>
+            );
+          })}
+        </>}
+
+        {/* ───── CUENTAS ───── */}
+        {s.vista === "cuentas" && <>
+          <div style={{ fontSize:14, fontWeight:500, marginBottom:"1rem" }}>Estado de cuentas</div>
+          {s.cuentas.map(c => {
+            const sal = saldos[c.id]||0;
+            const usd = toUSD(sal,c.moneda,s.tcambio);
+            const ars = toARS(sal,c.moneda,s.tcambio);
+            const nmov = s.movimientos.filter(m=>m.cuenta===c.id||m.cuentaDest===c.id).length;
+            return card(
+              <>
+                <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:12 }}>
+                  <div style={{ width:12,height:12,borderRadius:"50%",background:c.color }}></div>
+                  <div style={{ flex:1,fontSize:15,fontWeight:500 }}>{c.nombre}</div>
+                  <span style={{ fontSize:11,background:"var(--bg2)",borderRadius:99,padding:"2px 8px",color:"var(--text2)" }}>{c.moneda}</span>
+                </div>
+                <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8 }}>
+                  {[{l:"Saldo",v:fmtM(sal,c.moneda)},{l:"USD",v:fmtUSD(usd)},{l:"ARS",v:fmtARS(ars)}].map(d=>(
+                    <div key={d.l} style={{ background:"var(--bg2)",borderRadius:"var(--radius)",padding:"8px 10px" }}>
+                      <div style={{ fontSize:10,color:"var(--text2)" }}>{d.l}</div>
+                      <div style={{ fontSize:13,fontWeight:500 }}>{d.v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop:8,fontSize:11,color:"var(--text2)" }}>{nmov} movimiento{nmov!==1?"s":""}</div>
+              </>,
+              { marginBottom:12 }
+            );
+          })}
+
+          <div style={{ background:"var(--bg2)",borderRadius:"var(--radius-lg)",padding:"14px 16px" }}>
+            <div style={{ fontSize:13,fontWeight:500,marginBottom:10 }}>Distribución del patrimonio</div>
+            {s.cuentas.map(c => {
+              const usd = toUSD(saldos[c.id]||0,c.moneda,s.tcambio);
+              const pct = totalUSD>0 ? Math.max(0,(usd/totalUSD)*100) : 0;
+              return (
+                <div key={c.id} style={{ marginBottom:8 }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3 }}>
+                    <span>{c.nombre}</span>
+                    <span style={{ color:"var(--text2)" }}>{pct.toFixed(1)}% · {fmtUSD(usd)}</span>
+                  </div>
+                  <div style={{ height:6,background:"var(--border)",borderRadius:99,overflow:"hidden" }}>
+                    <div style={{ height:"100%",width:`${pct}%`,background:c.color,borderRadius:99 }}></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>}
+      </div>
+
+      {/* FAB */}
+      {s.vista !== "movimientos" && (
+        <div style={{ position:"fixed",bottom:20,right:20,zIndex:100 }}>
+          <button onClick={()=>{ dispatch({type:"SET_VISTA",vista:"movimientos"}); if(!s.showAddMov) dispatch({type:"TOGGLE_ADD_MOV"}); }}
+            style={{ background:"var(--text)",color:"var(--bg)",border:"none",borderRadius:99,padding:"12px 20px",fontSize:14,fontWeight:500,boxShadow:"0 2px 12px rgba(0,0,0,0.25)",display:"flex",alignItems:"center",gap:6 }}>
+            <i className="ti ti-plus"></i> Agregar
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("app")).render(<App />);
+</script>
+</body>
+</html>
