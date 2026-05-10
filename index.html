@@ -198,6 +198,128 @@ function BarChart({ data }) {
   );
 }
 
+const SUB_TABS = [
+  { id:"binance", label:"Binance", icon:"ti-currency-bitcoin" },
+  { id:"bot",     label:"Bot Sunix", icon:"ti-robot" },
+  { id:"acciones",label:"Acciones",  icon:"ti-building-bank" },
+];
+
+function InversionesView({ tc }) {
+  const [tab, setTab]         = React.useState("binance");
+  const [bData, setBData]     = React.useState(null);
+  const [bLoading, setBLoading] = React.useState(false);
+  const [bError, setBError]   = React.useState(null);
+  const [bTs, setBTs]         = React.useState(null);
+
+  async function fetchBinance() {
+    setBLoading(true); setBError(null);
+    try {
+      const r    = await fetch("/api/binance");
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+      setBData(data.balances);
+      setBTs(new Date().toLocaleTimeString("es-AR"));
+    } catch(e) {
+      setBError(e.message || "Error al conectar con Binance");
+    } finally { setBLoading(false); }
+  }
+
+  React.useEffect(() => { if (tab === "binance") fetchBinance(); }, [tab]);
+
+  const totalUSD = (bData || []).reduce((a, b) => {
+    if (b.asset === "USDT" || b.asset === "BUSD") return a + b.total;
+    if (b.asset === "BTC")  return a + b.total * 95000;
+    if (b.asset === "ETH")  return a + b.total * 3200;
+    return a + b.total;
+  }, 0);
+
+  return (
+    <div>
+      <div style={{ fontSize:14, fontWeight:500, marginBottom:"1rem" }}>Inversiones</div>
+
+      {/* Sub-tabs */}
+      <div style={{ display:"flex", gap:8, marginBottom:"1.25rem", overflowX:"auto" }}>
+        {SUB_TABS.map(t => (
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 14px", fontSize:13, fontWeight:tab===t.id?500:400, background:tab===t.id?"var(--text)":"var(--bg2)", color:tab===t.id?"var(--bg)":"var(--text2)", border:`0.5px solid ${tab===t.id?"var(--text)":"var(--border)"}`, borderRadius:99, whiteSpace:"nowrap", cursor:"pointer" }}>
+            <i className={`ti ${t.icon}`} style={{fontSize:14}}></i> {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* BINANCE */}
+      {tab === "binance" && (
+        <div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+            <div>
+              <div style={{ fontSize:12, color:"var(--text2)" }}>Total en Binance</div>
+              <div style={{ fontSize:26, fontWeight:500 }}>{"USD " + totalUSD.toLocaleString("es-AR",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+              {bTs && <div style={{ fontSize:11, color:"var(--text3)" }}>Act. {bTs}</div>}
+            </div>
+            <button onClick={fetchBinance} disabled={bLoading}
+              style={{ display:"flex", alignItems:"center", gap:5, fontSize:13 }}>
+              <i className={`ti ${bLoading?"ti-loader":"ti-refresh"}`}></i>
+              {bLoading ? "Cargando..." : "Actualizar"}
+            </button>
+          </div>
+
+          {bError && (
+            <div style={{ background:"var(--red)22", border:"0.5px solid var(--red)", borderRadius:"var(--radius)", padding:"10px 14px", fontSize:13, color:"var(--red)", marginBottom:12 }}>
+              <i className="ti ti-alert-circle"></i> {bError}
+            </div>
+          )}
+
+          {bLoading && !bData && (
+            <div style={{ textAlign:"center", padding:"3rem 0", color:"var(--text2)", fontSize:13 }}>
+              <i className="ti ti-loader" style={{fontSize:24}}></i>
+              <div style={{marginTop:8}}>Conectando con Binance...</div>
+            </div>
+          )}
+
+          {bData && bData.length === 0 && (
+            <div style={{ textAlign:"center", padding:"2rem 0", color:"var(--text2)", fontSize:13 }}>Sin saldo en Binance</div>
+          )}
+
+          {bData && bData.map(b => (
+            <div key={b.asset} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 14px", marginBottom:8, background:"var(--bg)", border:"0.5px solid var(--border)", borderRadius:"var(--radius-lg)" }}>
+              <div style={{ width:36, height:36, borderRadius:"50%", background:"var(--bg2)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:500, color:"var(--text2)", flexShrink:0 }}>
+                {b.asset.slice(0,3)}
+              </div>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:14, fontWeight:500 }}>{b.asset}</div>
+                {b.locked > 0 && <div style={{ fontSize:11, color:"var(--text2)" }}>Bloqueado: {b.locked}</div>}
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:15, fontWeight:500 }}>{b.total.toLocaleString("es-AR",{minimumFractionDigits:4,maximumFractionDigits:6})}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* BOT */}
+      {tab === "bot" && (
+        <div style={{ textAlign:"center", padding:"3rem 1rem" }}>
+          <i className="ti ti-robot" style={{ fontSize:40, color:"var(--text3)" }}></i>
+          <div style={{ fontSize:15, fontWeight:500, marginTop:12 }}>Bot Sunix / Exness</div>
+          <div style={{ fontSize:13, color:"var(--text2)", marginTop:6, maxWidth:280, margin:"8px auto 0" }}>
+            Podés registrar el saldo del bot manualmente desde la sección Movimientos usando la cuenta "Bot de Trading".
+          </div>
+        </div>
+      )}
+
+      {/* ACCIONES */}
+      {tab === "acciones" && (
+        <div style={{ textAlign:"center", padding:"3rem 1rem" }}>
+          <i className="ti ti-building-bank" style={{ fontSize:40, color:"var(--text3)" }}></i>
+          <div style={{ fontSize:15, fontWeight:500, marginTop:12 }}>Acciones</div>
+          <div style={{ fontSize:13, color:"var(--text2)", marginTop:6 }}>Próximamente</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [s, dispatch] = useReducer(reducer, null, initState);
   const [dolarInfo, setDolarInfo] = useState({ blue: null, oficial: null, loading: false, error: false, ts: null });
@@ -250,10 +372,11 @@ function App() {
   if (!mesesDisp.includes(mesAct)) mesesDisp.unshift(mesAct);
 
   const nav = [
-    { id:"dashboard", icon:"ti-layout-dashboard", label:"Resumen" },
-    { id:"graficos",  icon:"ti-chart-pie",         label:"Gráficos" },
-    { id:"movimientos",icon:"ti-arrows-exchange",  label:"Movimientos" },
-    { id:"cuentas",   icon:"ti-wallet",            label:"Cuentas" },
+    { id:"dashboard",    icon:"ti-layout-dashboard", label:"Resumen" },
+    { id:"graficos",     icon:"ti-chart-pie",        label:"Gráficos" },
+    { id:"movimientos",  icon:"ti-arrows-exchange",  label:"Movimientos" },
+    { id:"inversiones",  icon:"ti-trending-up",      label:"Inversiones" },
+    { id:"cuentas",      icon:"ti-wallet",           label:"Cuentas" },
   ];
 
   const card = (children, extra={}) => (
@@ -483,6 +606,9 @@ function App() {
             );
           })}
         </>}
+
+        {/* ───── INVERSIONES ───── */}
+        {s.vista === "inversiones" && <InversionesView tc={s.tcambio} />}
 
         {/* ───── CUENTAS ───── */}
         {s.vista === "cuentas" && <>
