@@ -97,6 +97,9 @@ function reducer(s, a) {
       if (isNaN(v) || v <= 0) return s;
       return { ...s, tcambio: { ...s.tcambio, ARS_USD: v }, showEditTC: false };
     }
+    case "GUARDAR_TC_DIRECTO": {
+      return { ...s, tcambio: { ...s.tcambio, ARS_USD: a.val }, formTC: { ARS_USD: String(Math.round(a.val)) } };
+    }
     case "ADD_MOV": {
       const monto = parseFloat(s.form.monto);
       if (isNaN(monto) || monto <= 0) return s;
@@ -197,6 +200,24 @@ function BarChart({ data }) {
 
 function App() {
   const [s, dispatch] = useReducer(reducer, null, initState);
+  const [dolarInfo, setDolarInfo] = useState({ blue: null, oficial: null, loading: false, error: false, ts: null });
+
+  async function fetchDolar() {
+    setDolarInfo(d => ({ ...d, loading: true, error: false }));
+    try {
+      const res = await fetch("https://dolarapi.com/v1/dolares");
+      const data = await res.json();
+      const blue    = data.find(d => d.casa === "blue");
+      const oficial = data.find(d => d.casa === "oficial");
+      const blueVal = blue ? (blue.compra + blue.venta) / 2 : null;
+      if (blueVal) dispatch({ type: "GUARDAR_TC_DIRECTO", val: blueVal });
+      setDolarInfo({ blue: blue ? { compra: blue.compra, venta: blue.venta } : null, oficial: oficial ? { compra: oficial.compra, venta: oficial.venta } : null, loading: false, error: false, ts: new Date().toLocaleTimeString("es-AR") });
+    } catch {
+      setDolarInfo(d => ({ ...d, loading: false, error: true }));
+    }
+  }
+
+  useEffect(() => { fetchDolar(); }, []);
 
   // Persistencia automática
   useEffect(() => {
@@ -253,12 +274,23 @@ function App() {
             <div style={{ fontSize:13, color:"var(--text2)" }}>{fmtARS(totalARS)}</div>
           </div>
           <div style={{ textAlign:"right" }}>
-            <div style={{ fontSize:12, color:"var(--text2)" }}>
-              1 USD = {fmtARS(s.tcambio.ARS_USD)}
-              <button onClick={()=>dispatch({type:"TOGGLE_EDIT_TC"})} style={{ marginLeft:5, background:"none", border:"none", cursor:"pointer", color:"var(--text2)", padding:0, fontSize:14 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:5, justifyContent:"flex-end" }}>
+              <div style={{ fontSize:12, color:"var(--text2)" }}>Blue: {fmtARS(s.tcambio.ARS_USD)}</div>
+              <button onClick={fetchDolar} disabled={dolarInfo.loading} title="Actualizar cotización" style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text2)", padding:0, fontSize:14 }}>
+                <i className={`ti ${dolarInfo.loading ? "ti-loader" : "ti-refresh"}`}></i>
+              </button>
+              <button onClick={()=>dispatch({type:"TOGGLE_EDIT_TC"})} style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text2)", padding:0, fontSize:14 }}>
                 <i className="ti ti-edit"></i>
               </button>
             </div>
+            {dolarInfo.blue && (
+              <div style={{ fontSize:10, color:"var(--text2)" }}>
+                C: {fmtARS(dolarInfo.blue.compra)} / V: {fmtARS(dolarInfo.blue.venta)}
+                {dolarInfo.oficial && <span> · Ofic: {fmtARS(dolarInfo.oficial.venta)}</span>}
+              </div>
+            )}
+            {dolarInfo.ts && <div style={{ fontSize:10, color:"var(--text3)" }}>Act. {dolarInfo.ts}</div>}
+            {dolarInfo.error && <div style={{ fontSize:10, color:"var(--red)" }}>Error al actualizar</div>}
             {s.showEditTC && (
               <div style={{ display:"flex", gap:5, alignItems:"center", marginTop:5 }}>
                 <input type="number" value={s.formTC.ARS_USD} onChange={e=>dispatch({type:"SET_FORM_TC",data:{ARS_USD:e.target.value}})} style={{ width:90 }} />
