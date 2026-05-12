@@ -58,8 +58,8 @@ const CAT_COLORS   = {
   Entretenimiento:"#D85A30",Ropa:"#BA7517",Otros:"#888780",
   Sueldo:"#1D9E75",Freelance:"#3266ad",Venta:"#7F77DD","Rendimiento bot":"#D85A30",
 };
-const TIPO_COLOR = { gasto:"#E24B4A", ingreso:"#1D9E75", transferencia:"#7F77DD" };
-const TIPO_LABEL = { gasto:"Gasto", ingreso:"Ingreso", transferencia:"Transfer." };
+const TIPO_COLOR = { gasto:"#E24B4A", ingreso:"#1D9E75", transferencia:"#7F77DD", ajuste:"#BA7517" };
+const TIPO_LABEL = { gasto:"Gasto", ingreso:"Ingreso", transferencia:"Transfer.", ajuste:"Ajuste" };
 
 function loadState() {
   try {
@@ -81,6 +81,8 @@ function initState() {
     formTC: { ARS_USD:"1200" },
     showAddMov: false,
     showEditTC: false,
+    ajusteCuenta: null,
+    ajusteForm: { saldo: "", nota: "" },
   };
 }
 
@@ -107,6 +109,28 @@ function reducer(s, a) {
       return { ...s, movimientos: [mov, ...s.movimientos], showAddMov: false, form: { ...s.form, monto:"", nota:"" } };
     }
     case "DEL_MOV": return { ...s, movimientos: s.movimientos.filter(m => m.id !== a.id) };
+    case "TOGGLE_AJUSTE": {
+      // a.cuentaId = id de cuenta a ajustar; si es null, cierra
+      return { ...s, ajusteCuenta: a.cuentaId, ajusteForm: { saldo: "", nota: "" } };
+    }
+    case "SET_AJUSTE_FORM": return { ...s, ajusteForm: { ...s.ajusteForm, ...a.data } };
+    case "ADD_AJUSTE": {
+      const saldo = parseFloat(s.ajusteForm.saldo);
+      if (isNaN(saldo)) return s;
+      const cuenta = s.cuentas.find(c => c.id === s.ajusteCuenta);
+      if (!cuenta) return s;
+      const mov = {
+        id: Date.now(),
+        tipo: "ajuste",
+        cuenta: s.ajusteCuenta,
+        moneda: cuenta.moneda,
+        monto: saldo,
+        categoria: "Ajuste de saldo",
+        nota: s.ajusteForm.nota,
+        fecha: new Date().toISOString().slice(0,10),
+      };
+      return { ...s, movimientos: [mov, ...s.movimientos], ajusteCuenta: null, ajusteForm: { saldo: "", nota: "" } };
+    }
     default: return s;
   }
 }
@@ -131,12 +155,21 @@ const fmtARS= n => "$ " + Math.round(n).toLocaleString("es-AR");
 function calcSaldos(movimientos, cuentas) {
   const s = {};
   cuentas.forEach(c => { s[c.id] = 0; });
-  movimientos.forEach(m => {
+  // Procesamos en orden cronológico (más viejos primero) para que los ajustes funcionen bien
+  const ordenados = [...movimientos].sort((a,b) => {
+    if (a.fecha !== b.fecha) return a.fecha.localeCompare(b.fecha);
+    return a.id - b.id;
+  });
+  ordenados.forEach(m => {
     if (m.tipo === "ingreso")       s[m.cuenta] = (s[m.cuenta]||0) + m.monto;
     else if (m.tipo === "gasto")    s[m.cuenta] = (s[m.cuenta]||0) - m.monto;
     else if (m.tipo === "transferencia") {
       s[m.cuenta]    = (s[m.cuenta]||0)    - m.monto;
       if (m.cuentaDest) s[m.cuentaDest] = (s[m.cuentaDest]||0) + m.monto;
+    }
+    else if (m.tipo === "ajuste") {
+      // El ajuste fija el saldo al valor "monto" (saldo objetivo)
+      s[m.cuenta] = m.monto;
     }
   });
   return s;
@@ -485,7 +518,7 @@ function App() {
                     <div style={{ fontSize:11, color:"var(--text2)" }}>{m.fecha} · {cta?.nombre}</div>
                   </div>
                   <div style={{ fontSize:14, fontWeight:500, color:TIPO_COLOR[m.tipo] }}>
-                    {m.tipo==="gasto"?"-":m.tipo==="ingreso"?"+":""}{fmtM(m.monto,m.moneda)}
+                    {m.tipo==="gasto"?"-":m.tipo==="ingreso"?"+":m.tipo==="ajuste"?"=":""}{fmtM(m.monto,m.moneda)}
                   </div>
                 </div>
               );
@@ -596,7 +629,7 @@ function App() {
                   </div>
                 </div>
                 <div style={{ textAlign:"right",marginRight:4 }}>
-                  <div style={{ fontSize:14,fontWeight:500,color:TIPO_COLOR[m.tipo] }}>{m.tipo==="gasto"?"-":m.tipo==="ingreso"?"+":""}{fmtM(m.monto,m.moneda)}</div>
+                  <div style={{ fontSize:14,fontWeight:500,color:TIPO_COLOR[m.tipo] }}>{m.tipo==="gasto"?"-":m.tipo==="ingreso"?"+":m.tipo==="ajuste"?"=":""}{fmtM(m.monto,m.moneda)}</div>
                   <div style={{ fontSize:11,color:"var(--text2)" }}>{fmtUSD(toUSD(m.monto,m.moneda,s.tcambio))}</div>
                 </div>
                 <button onClick={()=>dispatch({type:"DEL_MOV",id:m.id})} style={{ background:"none",border:"none",cursor:"pointer",color:"var(--text2)",padding:0,fontSize:16 }} aria-label="eliminar">
@@ -618,6 +651,7 @@ function App() {
             const usd = toUSD(sal,c.moneda,s.tcambio);
             const ars = toARS(sal,c.moneda,s.tcambio);
             const nmov = s.movimientos.filter(m=>m.cuenta===c.id||m.cuentaDest===c.id).length;
+            const editando = s.ajusteCuenta === c.id;
             return card(
               <>
                 <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:12 }}>
@@ -633,7 +667,53 @@ function App() {
                     </div>
                   ))}
                 </div>
-                <div style={{ marginTop:8,fontSize:11,color:"var(--text2)" }}>{nmov} movimiento{nmov!==1?"s":""}</div>
+                <div style={{ marginTop:10, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <div style={{ fontSize:11,color:"var(--text2)" }}>{nmov} movimiento{nmov!==1?"s":""}</div>
+                  <button
+                    onClick={()=>dispatch({type:"TOGGLE_AJUSTE", cuentaId: editando ? null : c.id})}
+                    style={{ display:"flex",alignItems:"center",gap:5,fontSize:12,padding:"6px 12px",borderColor:"var(--amber)",color:"var(--amber)" }}>
+                    <i className={`ti ${editando ? "ti-x" : "ti-adjustments"}`}></i> {editando ? "Cancelar" : "Ajustar saldo"}
+                  </button>
+                </div>
+
+                {editando && (
+                  <div style={{ marginTop:12, padding:"12px", background:"var(--bg2)", borderRadius:"var(--radius)", border:"0.5px solid var(--border)" }}>
+                    <div style={{ fontSize:11, color:"var(--text2)", marginBottom:8 }}>
+                      Escribí el saldo real que tenés en esta cuenta. Se va a registrar como movimiento "Ajuste" en {c.moneda}.
+                    </div>
+                    <div style={{ marginBottom:8 }}>
+                      {label11(`Saldo real en ${c.moneda}`)}
+                      <input
+                        type="number"
+                        placeholder={`Ej: ${sal.toFixed(2)}`}
+                        value={s.ajusteForm.saldo}
+                        onChange={e=>dispatch({type:"SET_AJUSTE_FORM",data:{saldo:e.target.value}})}
+                        autoFocus
+                      />
+                    </div>
+                    <div style={{ marginBottom:10 }}>
+                      {label11("Nota (opcional)")}
+                      <input
+                        type="text"
+                        placeholder="Ej: compré dólares a $1100"
+                        value={s.ajusteForm.nota}
+                        onChange={e=>dispatch({type:"SET_AJUSTE_FORM",data:{nota:e.target.value}})}
+                      />
+                    </div>
+                    {s.ajusteForm.saldo !== "" && !isNaN(parseFloat(s.ajusteForm.saldo)) && (
+                      <div style={{ fontSize:11, color:"var(--text2)", marginBottom:10, padding:"6px 10px", background:"var(--bg)", borderRadius:"var(--radius)" }}>
+                        Diferencia: <strong style={{ color: (parseFloat(s.ajusteForm.saldo)-sal) >= 0 ? "var(--green)" : "var(--red)" }}>
+                          {(parseFloat(s.ajusteForm.saldo)-sal) >= 0 ? "+" : ""}{fmtM(parseFloat(s.ajusteForm.saldo)-sal, c.moneda)}
+                        </strong>
+                      </div>
+                    )}
+                    <button
+                      onClick={()=>dispatch({type:"ADD_AJUSTE"})}
+                      style={{ width:"100%", fontSize:13, fontWeight:500, background:"var(--amber)", color:"#fff", border:"none" }}>
+                      Guardar ajuste
+                    </button>
+                  </div>
+                )}
               </>,
               { marginBottom:12 }
             );
