@@ -49,27 +49,28 @@ const STORAGE_KEY = "gestor_v1";
 // CAPA DE ACCESO A SUPABASE
 // ═══════════════════════════════════════════════════════════════
 // Inicializa el cliente cuando se cargan las credenciales desde /api/config
-let supabase = null;
+let sbClient = null;
 let supabaseReady = false;
 
 async function initSupabase() {
-  if (supabaseReady) return supabase;
+  if (supabaseReady) return sbClient;
   try {
-    // Esperar a que window.supabase esté disponible (puede no haber cargado todavía)
+    // Esperar a que el SDK esté disponible (puede no haber cargado todavía)
     let attempts = 0;
-    while (!window.supabase && attempts < 50) {
+    while ((typeof window.supabase === "undefined" || typeof window.supabase.createClient !== "function") && attempts < 50) {
       await new Promise(r => setTimeout(r, 100));
       attempts++;
     }
-    if (!window.supabase) {
-      throw new Error("SDK de Supabase no cargó");
+    const sdk = window.supabase;
+    if (!sdk || typeof sdk.createClient !== "function") {
+      throw new Error("SDK de Supabase no expuesto correctamente");
     }
     const res = await fetch("/api/config");
     if (!res.ok) throw new Error("config error");
     const { supabaseUrl, supabaseKey } = await res.json();
-    supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+    sbClient = sdk.createClient(supabaseUrl, supabaseKey);
     supabaseReady = true;
-    return supabase;
+    return sbClient;
   } catch (e) {
     console.warn("Supabase no disponible, usando solo localStorage:", e.message);
     return null;
@@ -79,11 +80,11 @@ async function initSupabase() {
 // API simple de base de datos
 const db = {
   async loadAll() {
-    if (!supabase) return null;
+    if (!sbClient) return null;
     const [cuentas, movimientos, settings] = await Promise.all([
-      supabase.from("cuentas").select("*").order("orden"),
-      supabase.from("movimientos").select("*").order("fecha", { ascending: false }).order("id", { ascending: false }),
-      supabase.from("settings").select("*"),
+      sbClient.from("cuentas").select("*").order("orden"),
+      sbClient.from("movimientos").select("*").order("fecha", { ascending: false }).order("id", { ascending: false }),
+      sbClient.from("settings").select("*"),
     ]);
     if (cuentas.error || movimientos.error || settings.error) {
       console.error("Error cargando datos:", cuentas.error || movimientos.error || settings.error);
@@ -110,7 +111,7 @@ const db = {
     };
   },
   async addMovimiento(m) {
-    if (!supabase) return;
+    if (!sbClient) return;
     const row = {
       id: m.id,
       tipo: m.tipo,
@@ -122,17 +123,17 @@ const db = {
       nota: m.nota || null,
       fecha: m.fecha,
     };
-    const { error } = await supabase.from("movimientos").insert(row);
+    const { error } = await sbClient.from("movimientos").insert(row);
     if (error) console.error("Error agregando movimiento:", error);
   },
   async deleteMovimiento(id) {
-    if (!supabase) return;
-    const { error } = await supabase.from("movimientos").delete().eq("id", id);
+    if (!sbClient) return;
+    const { error } = await sbClient.from("movimientos").delete().eq("id", id);
     if (error) console.error("Error eliminando movimiento:", error);
   },
   async setTipoCambio(tcambio) {
-    if (!supabase) return;
-    const { error } = await supabase
+    if (!sbClient) return;
+    const { error } = await sbClient
       .from("settings")
       .upsert({ key: "tcambio", value: tcambio, updated_at: new Date().toISOString() });
     if (error) console.error("Error guardando tcambio:", error);
