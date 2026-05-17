@@ -9,6 +9,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.x/tabler-icons.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -40,9 +41,94 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script type="text/babel">
-const { useState, useReducer, useEffect } = React;
+const { useState, useReducer, useEffect, useRef } = React;
 
 const STORAGE_KEY = "gestor_v1";
+
+// ═══════════════════════════════════════════════════════════════
+// CAPA DE ACCESO A SUPABASE
+// ═══════════════════════════════════════════════════════════════
+// Inicializa el cliente cuando se cargan las credenciales desde /api/config
+let supabase = null;
+let supabaseReady = false;
+
+async function initSupabase() {
+  if (supabaseReady) return supabase;
+  try {
+    const res = await fetch("/api/config");
+    if (!res.ok) throw new Error("config error");
+    const { supabaseUrl, supabaseKey } = await res.json();
+    supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+    supabaseReady = true;
+    return supabase;
+  } catch (e) {
+    console.warn("Supabase no disponible, usando solo localStorage:", e.message);
+    return null;
+  }
+}
+
+// API simple de base de datos
+const db = {
+  async loadAll() {
+    if (!supabase) return null;
+    const [cuentas, movimientos, settings] = await Promise.all([
+      supabase.from("cuentas").select("*").order("orden"),
+      supabase.from("movimientos").select("*").order("fecha", { ascending: false }).order("id", { ascending: false }),
+      supabase.from("settings").select("*"),
+    ]);
+    if (cuentas.error || movimientos.error || settings.error) {
+      console.error("Error cargando datos:", cuentas.error || movimientos.error || settings.error);
+      return null;
+    }
+    // Mapear movimientos al formato que usa la app (snake_case → camelCase)
+    const movs = movimientos.data.map(m => ({
+      id: Number(m.id),
+      tipo: m.tipo,
+      cuenta: m.cuenta,
+      cuentaDest: m.cuenta_dest,
+      moneda: m.moneda,
+      monto: parseFloat(m.monto),
+      categoria: m.categoria || "",
+      nota: m.nota || "",
+      fecha: m.fecha,
+    }));
+    const settingsMap = {};
+    settings.data.forEach(s => { settingsMap[s.key] = s.value; });
+    return {
+      cuentas: cuentas.data,
+      movimientos: movs,
+      tcambio: settingsMap.tcambio || { ARS_USD: 1200 },
+    };
+  },
+  async addMovimiento(m) {
+    if (!supabase) return;
+    const row = {
+      id: m.id,
+      tipo: m.tipo,
+      cuenta: m.cuenta,
+      cuenta_dest: m.cuentaDest || null,
+      moneda: m.moneda,
+      monto: m.monto,
+      categoria: m.categoria || null,
+      nota: m.nota || null,
+      fecha: m.fecha,
+    };
+    const { error } = await supabase.from("movimientos").insert(row);
+    if (error) console.error("Error agregando movimiento:", error);
+  },
+  async deleteMovimiento(id) {
+    if (!supabase) return;
+    const { error } = await supabase.from("movimientos").delete().eq("id", id);
+    if (error) console.error("Error eliminando movimiento:", error);
+  },
+  async setTipoCambio(tcambio) {
+    if (!supabase) return;
+    const { error } = await supabase
+      .from("settings")
+      .upsert({ key: "tcambio", value: tcambio, updated_at: new Date().toISOString() });
+    if (error) console.error("Error guardando tcambio:", error);
+  },
+};
 
 const CUENTAS_DEFAULT = [
   { id: "efectivo", nombre: "Efectivo / Billetera", moneda: "ARS", color: "#1D9E75" },
@@ -88,6 +174,15 @@ function initState() {
 
 function reducer(s, a) {
   switch (a.type) {
+    case "HYDRATE_FROM_DB": {
+      // Reemplaza cuentas, movimientos y tcambio con los datos de la BD
+      return {
+        ...s,
+        cuentas: a.data.cuentas,
+        movimientos: a.data.movimientos,
+        tcambio: { ...s.tcambio, ...a.data.tcambio },
+      };
+    }
     case "SET_VISTA":     return { ...s, vista: a.vista };
     case "SET_FORM":      return { ...s, form: { ...s.form, ...a.data } };
     case "SET_FORM_TC":   return { ...s, formTC: { ...s.formTC, ...a.data } };
@@ -356,6 +451,62 @@ function InversionesView({ tc }) {
 function App() {
   const [s, dispatch] = useReducer(reducer, null, initState);
   const [dolarInfo, setDolarInfo] = useState({ blue: null, oficial: null, loading: false, error: false, ts: null });
+  const [syncStatus, setSyncStatus] = useState("loading"); // loading | synced | offline | error
+  const lastSyncedTC = useRef(null);
+  const lastSyncedMovIds = useRef(new Set());
+
+  // ───── Carga inicial desde Supabase ─────
+  useEffect(() => {
+    (async () => {
+      const client = await initSupabase();
+      if (!client) {
+        setSyncStatus("offline");
+        return;
+      }
+      try {
+        const data = await db.loadAll();
+        if (data) {
+          dispatch({ type: "HYDRATE_FROM_DB", data });
+          lastSyncedTC.current = JSON.stringify(data.tcambio);
+          data.movimientos.forEach(m => lastSyncedMovIds.current.add(m.id));
+          setSyncStatus("synced");
+        } else {
+          setSyncStatus("error");
+        }
+      } catch (e) {
+        console.error("Error hidratando:", e);
+        setSyncStatus("error");
+      }
+    })();
+  }, []);
+
+  // ───── Sync: detectar movimientos nuevos y enviarlos a Supabase ─────
+  useEffect(() => {
+    if (syncStatus !== "synced") return;
+    const currentIds = new Set(s.movimientos.map(m => m.id));
+    // Nuevos: están en estado pero no en lastSynced
+    const nuevos = s.movimientos.filter(m => !lastSyncedMovIds.current.has(m.id));
+    nuevos.forEach(m => {
+      lastSyncedMovIds.current.add(m.id);
+      db.addMovimiento(m);
+    });
+    // Eliminados: estaban en lastSynced pero ya no en estado
+    const eliminados = [...lastSyncedMovIds.current].filter(id => !currentIds.has(id));
+    eliminados.forEach(id => {
+      lastSyncedMovIds.current.delete(id);
+      db.deleteMovimiento(id);
+    });
+  }, [s.movimientos, syncStatus]);
+
+  // ───── Sync: detectar tipo de cambio modificado ─────
+  useEffect(() => {
+    if (syncStatus !== "synced") return;
+    const tcStr = JSON.stringify(s.tcambio);
+    if (lastSyncedTC.current && lastSyncedTC.current !== tcStr) {
+      lastSyncedTC.current = tcStr;
+      db.setTipoCambio(s.tcambio);
+    }
+  }, [s.tcambio, syncStatus]);
 
   async function fetchDolar() {
     setDolarInfo(d => ({ ...d, loading: true, error: false }));
@@ -425,7 +576,12 @@ function App() {
       <div style={{ padding:"1.25rem 1rem 0.75rem", borderBottom:"0.5px solid var(--border)" }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
           <div>
-            <div style={{ fontSize:12, color:"var(--text2)" }}>Patrimonio total</div>
+            <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+              <div style={{ fontSize:12, color:"var(--text2)" }}>Patrimonio total</div>
+              <i className={`ti ${syncStatus === "loading" ? "ti-cloud" : syncStatus === "synced" ? "ti-cloud-check" : syncStatus === "offline" ? "ti-cloud-off" : "ti-cloud-x"}`}
+                 title={syncStatus === "loading" ? "Sincronizando..." : syncStatus === "synced" ? "Sincronizado en la nube" : syncStatus === "offline" ? "Modo offline (sin internet)" : "Error de sincronización"}
+                 style={{ fontSize:13, color: syncStatus === "synced" ? "var(--green)" : syncStatus === "loading" ? "var(--text3)" : syncStatus === "offline" ? "var(--amber)" : "var(--red)" }}></i>
+            </div>
             <div style={{ fontSize:30, fontWeight:500, lineHeight:1.2 }}>{fmtUSD(totalUSD)}</div>
             <div style={{ fontSize:13, color:"var(--text2)" }}>{fmtARS(totalARS)}</div>
           </div>
