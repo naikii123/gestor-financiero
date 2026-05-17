@@ -55,6 +55,15 @@ let supabaseReady = false;
 async function initSupabase() {
   if (supabaseReady) return supabase;
   try {
+    // Esperar a que window.supabase esté disponible (puede no haber cargado todavía)
+    let attempts = 0;
+    while (!window.supabase && attempts < 50) {
+      await new Promise(r => setTimeout(r, 100));
+      attempts++;
+    }
+    if (!window.supabase) {
+      throw new Error("SDK de Supabase no cargó");
+    }
     const res = await fetch("/api/config");
     if (!res.ok) throw new Error("config error");
     const { supabaseUrl, supabaseKey } = await res.json();
